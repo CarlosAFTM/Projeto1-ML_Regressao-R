@@ -1,0 +1,594 @@
+---
+title: "Projeto 1 - R com Azure Data Science Academy"
+author: "Carlos Augusto Schneider"
+date: "04/10/2022"
+output: pdf_document
+---
+
+## **ETAPA 1 - Carregamento e preparação do dataframe**
+
+Inicialmente, as linhas do script para definição do diretório de trabalho e carregar os pacotes de funções que serão utilizados.
+
+```{r echo=FALSE, message=FALSE,warning=FALSE}
+setwd("/home/carlos/FCD/BigDataRAzure/projetos/projeto1")
+getwd()
+
+library(haven)
+library(tidyverse)
+library(corrgram)
+library(caret)
+library(car)
+library(h2o)
+library(tinytex)
+library(ggbeeswarm)
+library(kableExtra)
+library(tinytex)
+```
+
+Para carregar o dataframe, optou-se por utilizar o pacote **Haven**, para leitura do arquivo SPSS (formato do arquivo pacote) relativo ao pacote estatístico da IBM.
+
+Abaixo, segue a descrição de cada uma das variáveis do dataframe:
+
+1.  **CAR:** nome do carro;
+
+2.  **Make:** Fabricante;
+
+3.  **Model:** Modelo do carro;
+
+4.  **Price:** Preço;
+
+5.  **Engine:** Potência do motor;
+
+6.  **Torque;** Força de rotação gerada pelo motor;
+
+7.  **Brakes:** Tipo do freio;
+
+8.  **Drive:** Tipo de tração;
+
+9.  **Battery:** Capacidade da bateria;
+
+10. **Range:** Alcance do carro em kilômetros;
+
+11. **Wheelbase:** distância entre os eixos;
+
+12. **Length:** Comprimento;
+
+13. **Width:** Largura;
+
+14. **Height:** Altura;
+
+15. **Weight:** Peso;
+
+16. **Permissible Weight:** Peso máximo permitido, incluindo a carga;
+
+17. **Capacity:** Capacidade de carga;
+
+18. **Seats:** Número de assentos;
+
+19. **Doors:** Número de portas;
+
+20. **Tire Size:** Tamanho do pneu;
+
+21. **Max Speed:** Velocidade máxima
+
+22. **Boot capacity:** Capacidade do porta-malas;
+
+23. **Acceleration:** Aceleração;
+
+24. **DC:** Potência máxima de carregamento;
+
+25. **Energy_consumption:** Consumo de energia. É a variável target (que pretende-se prever).
+
+```{r echo=TRUE, warning=FALSE}
+df <- read_spss("FEV-dataset-SPSS.sav")
+dim(df)
+Variaveis <- colnames(df)
+Tipos <- sapply(df, mode)
+tabela <- as.data.frame(Variaveis,Tipos, colnames = c("Variaveis","Tipos"))
+kable(tabela,caption = "Tipos das variáveis",format = "pipe")
+rm(tabela,Tipos,Variaveis)
+```
+
+É necessário converter variáveis do tipo caractere em fator. Há ainda algumas variáveis numéricas com poucos valores, que na realidade também se enquadram na categoria fator, conforme código abaixo:
+
+```{r echo=TRUE}
+z <- c("Seats","Doors","Tire_size","DC")
+lapply(df[z], unique)
+```
+
+O código abaixo faz a conversão dessas variáveis para o tipo Fator.
+
+```{r}
+df1 <- df %>% 
+  mutate_if(is.character, factor)
+
+df1[,z] <- lapply(df1[,z],factor)
+rm(z)
+```
+
+O passo seguinte é o tratamento dos valores missing (**NA**) presentes no dataframe.
+
+```{r}
+colSums(is.na(df))
+```
+
+Os modelos de veículos sem dados para a variável target (**Energy Comsuption**) não serão úteis para elaboração do modelo preditivo, uma vez que não há como verificar o desempenho do modelo preditivo. Optou-se por excluír essas observações.
+
+```{r echo=TRUE}
+df1 <- filter(df1, !is.na(Energy_consumption))
+
+which(is.na(df1), arr.ind = TRUE)
+colnames(df1[c(7,22,23)])
+```
+
+Restaram apenas dois modelos de veículos com valores NA, nas variáveis **Brakes**, **Boot_capacity** (capacidade do porta-malas) e **Acceleration**. Optou-se por excluí-las do dataset.
+
+```{r echo=TRUE}
+df1 <- na.omit(df1)
+
+any(is.na(df1))
+dim(df1)
+```
+
+Por fim, optou-se por excluir do dataframe as variáveis **Car**, **Make (fabricante)** e **Model**. Achamos que os modelos preditivos serão mais relevantes se descobrirem o consumo de energia com base em características do veíclulo, e não em função do modelo específico ou mesmo do fabricante.
+
+```{r echo=TRUE}
+df1 <- select(df1,-c("CAR","Make","Model"))
+
+```
+
+## **ETAPA 2 - Análise Exploratória**
+
+Nessa etapa vamos gerar alguns gráficos para observação da relação das variáveis independentes entre si e com a variável Target.
+
+Inicialmente um histograma da distribuição de frequências da variável target (**Energy_consumption**):
+
+```{r echo=TRUE}
+summary(df1$Energy_consumption)
+
+ggplot(df1, aes(x = Energy_consumption)) +
+  geom_histogram(binwidth = 0.5, fill = "darksalmon")
+```
+
+Optamos por utilizar gráficos do tipo boxplot para análise das variáveis do tipo fator com a variável Target e gráficos de pontos (scatterplots) para analisar a relação das variáveis numéricas com a variável Target. Então, vamos primeiro fazer a divisão do dataframe:
+
+```{r}
+fator <- sapply(df1, is.factor)
+
+fatores <- colnames(select(df1, which(fator)))
+numericas <- colnames(select(df1, which(!fator)))
+numericas <- numericas[! numericas %in% c("Energy_consumption")] 
+```
+
+Agora segue o bloco de instruções para a geração dos boxplots:
+
+```{r echo=TRUE}
+labels_boxplot = list()
+
+for (n in 1:(length(fatores))) {
+  labels_boxplot[[n]] <- paste("Energy Consumption by",fatores[n])    
+  }
+
+plot.boxes  <- function(X, label){ 
+  ggplot(df1, aes_string(x = X, y = "Energy_consumption", group = X)) + 
+    geom_boxplot(fill = "violet") + 
+    ggtitle(label) +
+    theme(text = element_text(size = 18)) 
+}
+
+Map(plot.boxes, fatores, labels_boxplot)
+
+rm(labels_boxplot)
+rm(plot.boxes)
+rm(n)
+
+```
+
+Em seguida, as instruções para a geração dos gráficos de pontos:
+
+```{r echo=TRUE}
+labels_scatter = list()
+
+for (n in 1:(length(numericas))) {
+  labels_scatter[[n]] <- paste("Energy Consumption by",numericas[n])
+  }
+
+plot.scatter <- function(X, label){ 
+  ggplot(df1, aes_string(x = X, y = "Energy_consumption")) + 
+    geom_point(aes_string(colour = "Energy_consumption"), alpha = 2.0) + 
+    scale_colour_gradient(low = "purple", high = "orange") + 
+    geom_smooth(method = "loess") + 
+    ggtitle(label) +
+    theme(text = element_text(size = 20)) 
+}
+
+Map(plot.scatter, numericas, labels_scatter)
+
+rm(n)
+rm(labels_scatter)
+rm(plot.scatter)
+rm(numericas)
+```
+
+Por fim, vamos verificar a correlação entre as variáveis independentes entre si e com a variável Target:
+
+```{r echo=TRUE, warning=FALSE}
+library(corrgram)
+corrgram(df1,cor.method = "pearson", panel = panel.cor)
+```
+
+Percebe-se que a maioria das variáveis são positivamente correlacionadas com o consumo de energia. Percebe-se ainda que algumas variáveis preditoras tem forte correlação entre si, o que pode representar problemas de multicolinearidade, que afetam negativamente o modelo e terão que ser resolvidos. Um exemplo é o par de variáveis **Wheight**(peso) e **Permissible Weight**(peso permitido), cuja correlação é de 0,98. Aqui é certo que exista colinearidade.
+
+## **ETAPA 3 - Seleção de variáveis**
+
+O objetivo nessa etapa é reduzir o máximo possível o número de variáveis preditoras sem perda significativa de desempenho do modelo preditor. Ao mesmo tempo, buscaremos reduzir a multicolinearidade. Para verificar a colinearidade, extrairemos apenas as variáveis do tipo numérico e usaremos a função **vif** do pacote **car**.
+
+```{r}
+df1_numeric <- select(df1,-all_of(fatores))
+set.seed(123)
+```
+
+Inicialmente, vamos criar um modelo de regressão linear apenas para avaliação das variáveis. O 1º modelo utilizará todas as variáveis numéricas do dataframe.
+
+```{r echo=TRUE}
+M <- lm(Energy_consumption ~ .,data=df1_numeric)
+summary(M)
+vif(M)
+```
+
+O R2 ajustado foi de **0,9225**. As variáveis mais importantes foram **Battery**(capacidade da bateria) e **Range**(alcance máximo do veículo, sendo portanto um bom avaliador de eficiência energética). Vamos portanto manter essas duas variáveis no modelo. Para avaliar a influência das demais variáveis no modelo, é prudente excluir uma por vez. Assim, teremos uma série de modelos em sequencia. Inicialmente, vamos excluir a variável "Weight", que apresentou o maior valor VIF para medição de colinearidade (valores maiores que 5 são problemáticos).
+
+```{r echo=TRUE}
+M2 <- lm(Energy_consumption~.-Weight,data=df1_numeric)
+summary(M2)
+vif(M2)
+```
+
+O R2 ajustado foi de **0,9248**. Houve melhora da colinearidade. Excluindo variável **Power** do dataset.
+
+```{r echo=TRUE}
+M3 <- lm(Energy_consumption~.-Weight -Power,data=df1_numeric)
+summary(M3)
+vif(M3)
+```
+
+O R2 ajustado foi de 0,9260. Houve melhora da colinearidade. Excluindo variável **Permissible Weight** do dataset.
+
+```{r echo=TRUE}
+M4 <- lm(Energy_consumption~.-Weight -Power -Permissible_weight,data=df1_numeric)
+summary(M4)
+vif(M4)
+```
+
+O R2 ajustado foi de 0,9247. Houve melhora da colinearidade. Excluindo variável **Max_speed** do dataset.
+
+```{r echo=TRUE}
+M5 <- lm(Energy_consumption~.-Weight -Power -Permissible_weight -Max_speed,data=df1_numeric)
+summary(M5)
+vif(M5)
+
+```
+
+O R2 ajustado foi de 0,9263. Houve melhora da colinearidade. Excluindo variável **Torque** do dataset.
+
+```{r echo=TRUE}
+M6 <- lm(Energy_consumption~.-Weight -Power -Permissible_weight -Max_speed -Torque,data=df1_numeric)
+summary(M6)
+vif(M6)
+
+```
+
+O R2 ajustado foi de 0,9282. Houve melhora da colinearidade. Excluindo variável **Length** do dataset.
+
+```{r echo=TRUE}
+M7 <- lm(Energy_consumption~.-Weight -Power -Permissible_weight -Max_speed -Torque -Length,data=df1_numeric)
+summary(M7)
+vif(M7)
+```
+
+O R2 ajustado foi de 0,9215. Houve melhora da colinearidade. Excluindo variável **Price** do dataset.
+
+```{r echo=TRUE}
+M8 <- lm(Energy_consumption~.-Weight -Power -Permissible_weight -Max_speed -Torque -Length -Price,data=df1_numeric)
+summary(M8)
+vif(M8)
+
+```
+
+O R2 ajustado foi de 0,923. Houve melhora da colinearidade. Excluindo variável **Wheelbase** do dataset.
+
+```{r}
+M9 <- lm(Energy_consumption~.-Weight -Power -Permissible_weight -Max_speed -Torque -Length -Price
+         -Wheelbase,data=df1_numeric)
+summary(M9)
+vif(M9)
+
+```
+
+O R2 ajustado foi de 0,9242. Houve melhora da colinearidade. Excluindo variável **Acceleration** do dataset.
+
+```{r echo=TRUE}
+M10 <- lm(Energy_consumption~.-Weight -Power -Permissible_weight -Max_speed -Torque -Length -Price
+         -Wheelbase -Acceleration,data=df1_numeric)
+summary(M10)
+vif(M10)
+
+```
+
+O R2 ajustado foi de 0,9263. Houve melhora da colinearidade. Excluindo variável **Boot_capacity** do dataset.
+
+```{r echo=TRUE}
+M11 <- lm(Energy_consumption~.-Weight -Power -Permissible_weight -Max_speed -Torque -Length -Price
+          -Wheelbase -Acceleration -Boot_capacity,data=df1_numeric)
+summary(M11)
+vif(M11)
+
+```
+
+O R2 ajustado foi de 0,928. Houve melhora da colinearidade. Excluindo variável **Width** do dataset.
+
+```{r echo=TRUE}
+M12 <- lm(Energy_consumption~.-Weight -Power -Permissible_weight -Max_speed -Torque -Length -Price
+          -Wheelbase -Acceleration -Boot_capacity -Width,data=df1_numeric)
+summary(M12)
+vif(M12)
+```
+
+O R2 ajustado foi de 0,9248. Houve melhora da colinearidade. Excluindo variável **Height** do dataset.
+
+```{r echo=TRUE}
+M13 <- lm(Energy_consumption~Battery+Range,data=df1_numeric)
+summary(M13)
+vif(M13)
+
+```
+
+O R2 ajustado foi de 0,9022. Houve melhora da colinearidade, mas também alguma perda de precisão do modelo. Como a colinearidade já está resolvida, decidimos continuar com a variável **Heigth** no modelo.
+
+Vamos criar um segundo dataframe, incluindo as variáveis do tipo fator.
+
+```{r echo=TRUE}
+z <- c(fatores,c("Battery","Range","Height","Energy_consumption"))
+df2 <- df1 %>%
+  select(all_of(z))
+View(df2)
+rm(z)
+
+```
+
+Vamos avaliar o modelo com as variáveis do tipo fator incluídas
+
+```{r echo=TRUE}
+M14 <- lm(Energy_consumption ~ .,data=df2)
+summary(M14)
+
+```
+
+O R2 ajustado foi de 0,981. Vamos agora excluir as variáveis fator menos relevantes para o modelo, começando com **Doors**.
+
+```{r echo=TRUE}
+M15 <- lm(Energy_consumption ~ . -Doors,data=df2)
+summary(M15)
+
+```
+
+O R2 ajustado foi de 0,9819. Todas as outras variáveis fator apresentam algum nível de importância. Assim, chegou-se ao dataframe final, excluindo a variável **Doors**.
+
+```{r echo=TRUE}
+df2 <- select(df2, -Doors)
+View(df2)
+dim(df)
+dim(df2)
+```
+
+Houve redução significativa do número de variáveis preditoras (de 25 para 9), foram resolvidos os problemas de colinearidade e não houve perda significativa da capacidade de previsão do modelo. Vamos excluir os objetos que não serão mais utilizados.
+
+```{r}
+rm(df1,df1_numeric,M,M2,M3,M4,M5,M6,M7,M8,M9,M10,M11,M12,M13,M14,M15,fator,fatores)
+```
+
+## **ETAPA 4 - Treinamento e validação do modelo**
+
+Inicialmente, vamos dividir o dataframe em dados de treino e de teste utilizando o pacote **Caret**.
+
+```{r echo=TRUE}
+set.seed(123)
+training.samples <- df2$Energy_consumption %>%
+  createDataPartition(p = 0.8, list = FALSE)
+train.data  <- df2[training.samples, ]
+test.data <- df2[-training.samples, ]
+```
+
+O primeiro modelo será o de regressão linear. Vamos usar como métrica principal para comparar modelos de diferentes algoritmos o RMSE (raiz quadrada do erro médio). Consideramos medidas de erro melhores para comparação de eficiência entre modelos que o R2 (coeficiente de determinação). Todos os modelos serão criados com validação cruzada de 5 amostras (**cv = 5**).
+
+```{r echo=TRUE}
+m1 <- train(Energy_consumption~., 
+            data=train.data, 
+            method='lm', 
+            metric='RMSE', 
+            trControl = trainControl(method = "cv", number = 5)
+)
+```
+
+Em modelos de regressão linear, esse tipo de aviso costuma ocorrer quando o dataframe tem poucas observações e muitas variáveis, como é o caso em análise. Por isso, vamos excluir algumas variáveis menos importantes antes de gerar o modelo.
+
+```{r echo=TRUE}
+
+m1 <- train(Energy_consumption~. -DC -Seats -Tire_size, 
+            data=train.data, 
+            method='lm', 
+            metric='RMSE', 
+            trControl = trainControl(method = "cv", number = 5)
+)
+```
+
+A seguir os resultados do modelo de regressão:
+
+```{r echo=TRUE}
+predictions <- m1 %>% predict(test.data)
+data.frame(
+  RMSE = RMSE(predictions, test.data$Energy_consumption),
+  R2 = R2(predictions, test.data$Energy_consumption)
+)
+```
+
+Agora vamos criar um modelo Random Forest.
+
+```{r}
+m2 <- train(Energy_consumption~., 
+            data=train.data, 
+            method='rf', 
+            metric='RMSE', 
+            trControl = trainControl(method = "cv", number = 5)
+)
+```
+
+A seguir os resultados do modelo Random Forest:
+
+```{r echo=TRUE}
+predictions2 <- m2 %>% predict(test.data)
+data.frame(
+  RMSE = RMSE(predictions2, test.data$Energy_consumption),
+  R2 = R2(predictions2, test.data$Energy_consumption)
+)
+```
+
+Observa-se que o entre os dois modelos, o que tem o menor RMSE é o de regressão linear. Por fim, a tabela final com as previsões do modelo de regressão, comparativamente aos modelos observados na amostra de teste.
+
+```{r echo=TRUE}
+tabelalm <- cbind(pred = predictions,obs = test.data$Energy_consumption)
+kable(tabelalm, caption = "Resultados - Modelo de Regressão Linear", format = "pipe")
+```
+
+```{r echo=TRUE}
+rm(predictions,predictions2,m1,m2,tabelalm,test.data,train.data,training.samples)
+```
+
+## **ETAPA 5 - Treinamento do Modelo com Auto ML**
+
+Agora, para treinamento e avaliação do modelo, vamos usar o pacote Auto ML **H20**.
+
+```{r echo=TRUE, message=FALSE, include=FALSE}
+
+h2o.init()
+```
+
+O H2O requer que os dados estejam no formato específico de dataframe do H2O
+
+```{r echo=TRUE}
+h2o_frame <- as.h2o(df2)
+tabela <- head(h2o_frame)
+kable(tabela,caption = "H2O Dataframe",format = "pipe")
+rm(tabela)
+```
+
+Utilizando a função de Split do pacote H20 para divisão do dataframe em dados de treino e de teste. Esse split do pacote H20 cria uma lista. O 1º elemento da lista é o dataset de treino e o 2º é o dataset de teste.
+
+```{r echo=TRUE}
+h2o_frame_split <- h2o.splitFrame(h2o_frame, ratios = 0.80, seed = 123)
+head(h2o_frame_split)
+
+```
+
+Na sequência, vamos usar o Auto ML para definir o melhor modelo. Para comparação dos modelos, vamos definir como métrica **RMSE** (raiz quadrada do erro médio). O algoritmo vai avaliar diversos modelos diferentes, alterando automaticamente os parâmetros dos modelos. Como resultado teremos uma tabela ordenada de modelos, em função do RMSE, para escolha do melhor modelo. melhor modelo.
+
+```{r echo=TRUE}
+modelo_automl <- h2o.automl(y = 'Energy_consumption',
+                            training_frame = h2o_frame_split[[1]],
+                            leaderboard_frame = h2o_frame_split[[2]],
+                            seed = 123,
+                            balance_classes = TRUE,
+                            max_runtime_secs = 60 * 10, 
+                            include_algos = c('XGBoost', 'DRF', 'GBM'),
+                            sort_metric = "RMSE")
+```
+
+Para avaliação de modelos, o H2O utiliza como padrão a avaliação cruzada com 5 amostras (folds = 5). Tivemos ainda que definir também um parâmetro para limite de tempo de processamento (**max_runtime_secs = 60 \* 10**) e um limite no número de algoritmos de Machine Learning para avaliação **(XGBoost, DRF, GBM)**, devido à limitações de capacidade de processamento de dados e memória. Por fim, decidimos fazer um balanceamento de classes, pois o dataframe final tem apenas 42 observações, o que acarreta falta de dados de algumas classes para elaboração do modelo, como pode-se ver no exemplo abaixo:
+
+```{r}
+table(df2$DC)
+
+ggplot(df2, aes(x = DC)) +
+  geom_bar(fill = "purple")
+
+```
+
+Extraindo em seguida o leaderboard.
+
+```{r echo=TRUE}
+leaderboard_automl <- as.data.frame(modelo_automl@leaderboard)
+View(leaderboard_automl)
+```
+
+Extraindo o líder (modelo com melhor desempenho)
+
+```{r echo=TRUE}
+lider_automl <- modelo_automl@leader
+lider_automl
+```
+
+Vamos verificar o desempenho do modelo H2O na previsão dos dados da amostra de teste.
+
+```{r echo=TRUE}
+
+predicted <- h2o.predict(lider_automl,h2o_frame_split[[2]]) %>%
+  as.data.frame()
+df_train <- as.data.frame(h2o_frame_split[[2]])
+
+tabela <- data.frame(
+  pred = predicted$predict,
+  obs = df_train$Energy_consumption
+)
+rm(predicted,df_train)
+kable(tabela,caption = "Resultados - Modelo AutoML",format = "pipe")
+
+
+R2(tabela$pred,tabela$obs)
+RMSE(tabela$pred,tabela$obs)
+
+```
+
+O desempenho desse modelo foi superior, em termos da métrica que foi adotada (RMSE) em relação ao modelo de regressão linear, criado manualmente na etapa anterior (0,78 X 1,09).
+
+Por fim, vamos verificar o nível de importância de cada variável no modelo líder gerado pelo Auto ML (**análise SHAP**). A função abaixo, do **H2O** traz os valores de contribuição de cada variável, seguindo o modelo **SHAP**, analisando cada observação da amostra de teste:
+
+```{r echo=TRUE}
+var_contrib <- predict_contributions.H2OModel(lider_automl, h2o_frame_split[[2]])
+```
+
+Para visualizar o resultado final,vamos preparar um dataframe com os as métricas necessárias
+
+```{r echo = TRUE}
+df_var_contrib <- var_contrib %>%
+  as.data.frame() %>%
+  select(-BiasTerm) %>%
+  gather(feature, shap_value) %>%
+  group_by(feature) %>%
+  mutate(shap_importance = mean(abs(shap_value)), shap_force = mean(shap_value)) %>% 
+  ungroup()
+
+View(df_var_contrib)
+
+```
+
+Agora o gráfico com a importância de cada variável para prever a variável alvo (**Energy_consumption**):
+
+```{r echo = TRUE}
+df_var_contrib %>% 
+  select(feature, shap_importance) %>%
+  distinct() %>% 
+  ggplot(aes(x = reorder(feature,shap_importance), y = shap_importance)) +
+  geom_col(fill = 'blue') +
+  coord_flip() +
+  xlab(NULL) +
+  ylab("Valor Médio das Métricas SHAP") +
+  theme_minimal(base_size = 15)
+```
+
+Desligando o H2O
+
+```{r echo=TRUE}
+
+h2o.shutdown()
+
+```
